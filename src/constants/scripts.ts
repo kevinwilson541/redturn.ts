@@ -15,6 +15,7 @@ return redis.call(\"LINDEX\", list, 0)
 export const REMOVE_SCRIPT = `
 local list = KEYS[1]
 local id = ARGV[1]
+local channel = ARGV[2]
 
 local value = redis.call("LINDEX", list, 0)
 local val_split = {}
@@ -23,8 +24,9 @@ for w in (value .. ":"):gmatch("([^:]*):") do
 end
 
 local val_id = val_split[1]
+local val_channel = val_split[2]
 local called = false
-if val_id == id then
+if val_id == id and val_channel == channel then
     redis.call("LPOP", list)
     called = true
 end

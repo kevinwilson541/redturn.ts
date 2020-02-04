@@ -161,7 +161,7 @@ export class RedTurn extends EventEmitter {
 
   async signal(resource: string, id: string): Promise<void> {
     this.leased.delete(id)
-    const ret: string = await this.client.evalsha(this.removeScript, 1, resource, id)
+    const ret: string = await this.client.evalsha(this.removeScript, 1, resource, id, this.id)
     if (ret !== null && this.state == RedTurnState.RUNNING) {
       const [ otherId, channel, timeoutStr ] = ret.split(":")
       this._replaceHead(channel, otherId, parseInt(timeoutStr))
