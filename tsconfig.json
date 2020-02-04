@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "outDir": "./built",
+    "allowJs": true,
+    "target": "es6",
+    "lib": ["es6"],
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "types": ["node", "mocha"],
+    "typeRoots": ["node_modules/@types"],
+    "module": "commonjs"
+  },
+  "include": [
+    "./src/*",
+    "./src/**/*"
+  ]
+}

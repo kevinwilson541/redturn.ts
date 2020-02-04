@@ -1,0 +1,32 @@
+{
+  "name": "redturn.ts",
+  "version": "0.1.0",
+  "description": "Event-based/queueing Redis mutex lock",
+  "main": "built/index.js",
+  "scripts": {
+    "test": "TS_NODE_TRANSPILE_ONLY=true TS_NODE_LOG_ERROR=true NODE_ENV=test mocha \"test/*.ts\"",
+    "build": "rm -rf built && tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/kevinwilson541/redturn.ts.git"
+  },
+  "author": "Kevin Wilson",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/kevinwilson541/redturn.ts/issues"
+  },
+  "homepage": "https://github.com/kevinwilson541/redturn.ts#readme",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/chai": "^4.2.8",
+    "@types/ioredis": "^4.14.6",
+    "@types/mocha": "^7.0.1",
+    "@types/node": "^13.7.0",
+    "chai": "^4.2.0",
+    "ioredis": "^4.14.1",
+    "mocha": "^7.0.1",
+    "ts-node": "^8.6.2",
+    "typescript": "^3.7.5"
+  }
+}
