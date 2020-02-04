@@ -208,30 +208,34 @@ export class RedTurn extends EventEmitter {
   private _removeFromReqQueue(ctx: RequestCtx) {
     const { resource, id } = ctx
     const queue = this.reqQueue.get(resource)
-    const head = queue.peek()
+    let head = queue.peek()
 
-    if (head === id) {
-      this.waiting.delete(id)
-      this._reply(ctx)
-      queue.dequeue()
-      if (queue.len() === 0) {
-        this.reqQueue.delete(resource)
-      }
-    } else if (head) {
+    // iterate through elements in queue until we reach id we're looking for
+    while (head && head !== id) {
       const [ milli, counter ] = head.split(".")
       const [ ctxMilli, ctxCounter ] = id.split(".")
       // if we receive notification for active ctx greater than the current head, head was skipped
       // otherwise, we should return an error as this notified ctx was skipped
       if (milli < ctxMilli || (milli === ctxMilli && counter < ctxCounter)) {
         const otherCtx = this.waiting.get(head)
-        this._reply(otherCtx, new Error("TODO"))
         queue.dequeue()
         this.waiting.delete(head)
-        this._removeFromReqQueue(ctx)
+        this._reply(otherCtx, new Error("TODO"))
+        head = queue.peek()
       } else {
+        this.waiting.delete(id)
         this._reply(ctx, new Error("TODO"))
+        break
       }
-    } else {
+    }
+
+    if (head === id) {
+      queue.dequeue()
+      this.waiting.delete(id)
+      this._reply(ctx)
+    }
+
+    if (queue.len() === 0) {
       this.reqQueue.delete(resource)
     }
 
