@@ -37,6 +37,22 @@ class Queue<T> {
   len() {
     return this._front.length + this._back.length
   }
+  
+  delete(val: T) {
+    let index = this._front.indexOf(val)
+    if (index >= 0) {
+      this._front = this._front.slice(0, index).concat(this._front.slice(index + 1))
+      return true
+    }
+
+    index = this._back.indexOf(val)
+    if (index >= 0) {
+      this._back = this._back.slice(0, index).concat(this._front.slice(index + 1))
+      return true
+    }
+
+    return false
+  }
 }
 
 export default Queue

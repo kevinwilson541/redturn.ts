@@ -12,6 +12,7 @@ export enum ScriptOperations {
 
 export interface HeadTracker {
   id: string
+  channel: string
   timeout: NodeJS.Timer
 }
 
@@ -74,10 +75,10 @@ export class RedTurn extends EventEmitter {
 
   async start() {
     if (this.state !== RedTurnState.STOPPED) {
-      throw new Error("TODO")
+      throw new Error(`Cannot start redturn server when in state ${RedTurnState.STOPPED}`)
     }
 
-    if (!this.addScript && !this.removeScript) {
+    if (!this.addScript || !this.removeScript) {
       const [addScript, removeScript] = await this.client.pipeline()
         .script(ScriptOperations.LOAD, ADD_SCRIPT)
         .script(ScriptOperations.LOAD, REMOVE_SCRIPT)
@@ -86,13 +87,13 @@ export class RedTurn extends EventEmitter {
       if (addScript[0] === null && typeof addScript[1] === "string") {
         this.addScript = addScript[1]
       } else {
-        throw new Error("TODO")
+        throw new Error(`Could not load ADD_SCRIPT`)
       }
 
       if (removeScript[0] === null && typeof removeScript[1] === "string") {
         this.removeScript = removeScript[1]
       } else {
-        throw new Error("TODO")
+        throw new Error(`Could not load REMOVE_SCRIPT`)
       }
     }
 
@@ -146,7 +147,8 @@ export class RedTurn extends EventEmitter {
       try {
         ret = await this.client.evalsha(this.addScript, 1, resource, this.id, val, id)
       } catch (e) {
-        this._removeFromReqQueue(ctx)
+        this._deleteCtx(ctx)
+        return reject(e)
       }
 
       if (this.state !== RedTurnState.RUNNING) {
@@ -154,21 +156,13 @@ export class RedTurn extends EventEmitter {
       }
 
       const [ otherId, channel, timeoutStr ] = ret.split(":")
-      this._replaceHead(channel, otherId, parseInt(timeoutStr))
+      this._replaceHead(resource, channel, otherId, parseInt(timeoutStr))
     })
     
   }
 
   async signal(resource: string, id: string): Promise<void> {
-    this.leased.delete(id)
-    const ret: string = await this.client.evalsha(this.removeScript, 1, resource, id, this.id)
-    if (ret !== null && this.state == RedTurnState.RUNNING) {
-      const [ otherId, channel, timeoutStr ] = ret.split(":")
-      this._replaceHead(channel, otherId, parseInt(timeoutStr))
-    }
-    if (this.idle()) {
-      this.emit("idle")
-    }
+    return this._signalDone(resource, this.id, id)
   }
 
   idle() {
@@ -179,20 +173,23 @@ export class RedTurn extends EventEmitter {
     return this.timer.getTime().join(".")
   }
 
-  private _replaceHead(channel: string, id: string, timeout: number) {
+  private _replaceHead(resource: string, channel: string, id: string, timeout: number) {
     const current = this.head.get(channel)
     if (current && current.id !== id) {
       clearTimeout(current.timeout)
     }
 
-    const timer = setTimeout(this._clearHead.bind(this, channel, id), timeout)
-    this.head.set(channel, { id, timeout: timer })
+    const timer = setTimeout(this._clearHead.bind(this, resource, channel, id), timeout)
+    this.head.set(resource, { id, channel, timeout: timer })
   }
 
-  private _clearHead(channel: string, id: string) {
+  private _clearHead(resource: string, channel: string, id: string) {
     if (this.state === RedTurnState.STOPPED) return
-    this.signal(channel, id)
-    this.head.delete(channel)
+    const { channel: otherChann, id: otherId } = this.head.get(resource)
+    if (otherChann === channel && otherId === id) {
+      this.head.delete(resource)
+      this._signalDone(resource, channel, id)
+    }
   }
 
   private _addToReqQueue(resource: string, id: string) {
@@ -220,11 +217,11 @@ export class RedTurn extends EventEmitter {
         const otherCtx = this.waiting.get(head)
         queue.dequeue()
         this.waiting.delete(head)
-        this._reply(otherCtx, new Error("TODO"))
+        this._reply(otherCtx, new Error(`Async notification message missed for resource ${resource}, request ${id}`))
         head = queue.peek()
       } else {
         this.waiting.delete(id)
-        this._reply(ctx, new Error("TODO"))
+        this._reply(ctx, new Error(`Async notification message missed for resource ${resource}, request ${id}`))
         break
       }
     }
@@ -252,7 +249,46 @@ export class RedTurn extends EventEmitter {
       this.signal(resource, id)
     } else {
       this._removeFromReqQueue(ctx)
-      this._replaceHead(resource, id, ctx.timeout)
+      this._replaceHead(resource, this.id, id, ctx.timeout)
+    }
+  }
+
+  _deleteCtx(ctx: RequestCtx) {
+    const { resource, id } = ctx
+    const queue = this.reqQueue.get(resource)
+
+    const rem = queue.delete(id)
+    if (rem === true) {
+      this.waiting.delete(id)
+    }
+
+    if (queue.len() === 0) {
+      this.reqQueue.delete(resource)
+    }
+
+    if (this.idle() === true) {
+      this.emit("idle")
+    }
+  }
+
+  private async _signalDone(resource: string, channel: string, id: string) {
+    // only delete leased id if signalling is for this instance of server
+    if (channel === this.id) {
+      this.leased.delete(id)
+    }
+    
+    try {
+      const ret: string = await this.client.evalsha(this.removeScript, 1, resource, id, channel)
+      if (ret !== null && this.state == RedTurnState.RUNNING) {
+        const [ otherId, channel, timeoutStr ] = ret.split(":")
+        this._replaceHead(resource, channel, otherId, parseInt(timeoutStr))
+      }
+    } catch (e) {
+      this.emit("error", e)
+    } finally {
+      if (channel === this.id && this.idle()) {
+        this.emit("idle")
+      }
     }
   }
 
