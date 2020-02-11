@@ -165,6 +165,10 @@ export class RedTurn extends EventEmitter {
     return this._signalDone(resource, this.id, id)
   }
 
+  getChannel() {
+    return this.id
+  }
+
   idle() {
     return this.leased.size === 0 && this.waiting.size === 0
   }
@@ -174,21 +178,24 @@ export class RedTurn extends EventEmitter {
   }
 
   private _replaceHead(resource: string, channel: string, id: string, timeout: number) {
-    const current = this.head.get(channel)
-    if (current && current.id !== id) {
+    const current = this.head.get(resource)
+    if (current && (current.id !== id || current.channel !== channel)) {
       clearTimeout(current.timeout)
+    } else if (current && (current.id === id && current.channel === channel)) {
+      return
     }
 
     const timer = setTimeout(this._clearHead.bind(this, resource, channel, id), timeout)
     this.head.set(resource, { id, channel, timeout: timer })
   }
 
-  private _clearHead(resource: string, channel: string, id: string) {
+  private async _clearHead(resource: string, channel: string, id: string) {
     if (this.state === RedTurnState.STOPPED) return
     const { channel: otherChann, id: otherId } = this.head.get(resource)
     if (otherChann === channel && otherId === id) {
       this.head.delete(resource)
-      this._signalDone(resource, channel, id)
+      await this._signalDone(resource, channel, id)
+      this.emit(`${resource}:${channel}:${id}:cleared`)
     }
   }
 

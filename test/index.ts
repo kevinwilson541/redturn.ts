@@ -22,7 +22,12 @@ describe("redturn tests", () => {
   afterEach(async () => {
     // @ts-ignore
     await client._clear()
-    await redis.flushdb()
+    await redis.del("resource")
+  })
+
+  after(async () => {
+    await redis.quit()
+    await sub.quit()
   })
 
   it("should make a call to wait", async () => {
@@ -94,5 +99,50 @@ describe("redturn tests", () => {
     const id3 = await pm3
     await client.signal("resource", id3)
     assert.ok(skipped)
+  })
+
+  it("should handle multiple clients", async () => {
+    const redis2 = new Redis()
+    const sub2 = new Redis()
+    const client2 = new RedTurn(redis2, sub2)
+    await client2.start()
+
+    const id1 = await client.wait("resource", 5000)
+    const pm2 = client2.wait("resource", 5000)
+
+    await client.signal("resource", id1)
+
+    const id2 = await pm2
+    await client2.signal("resource", id2)
+
+    await client2.stop()
+    await redis2.quit()
+    await sub2.quit()
+  })
+
+  it("should handle closing head tracker", async () => {
+    const redis2 = new Redis()
+    const sub2 = new Redis()
+    const client2 = new RedTurn(redis2, sub2)
+    await client2.start()
+
+    const id1 = await client.wait("resource", 50)
+    const pm2 = client.wait("resource", 5000)
+    const pm3 = client2.wait("resource", 5000)
+
+    // wait for client2 to clear resource based on timeout
+    await new Promise(resolve => {
+      client2.on(`resource:${client.getChannel()}:${id1}:cleared`, resolve)
+    })
+    const id2 = await pm2
+
+    await client.signal("resource", id2)
+
+    const id3 = await pm3
+    await client2.signal("resource", id3)
+
+    await client2.stop()
+    await redis2.quit()
+    await sub2.quit()
   })
 })
