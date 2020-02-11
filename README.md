@@ -49,7 +49,7 @@ end
 local val_id = val_split[1]
 local val_channel = val_split[2]
 local called = false
-if val_id == id and val_channel = channel then
+if val_id == id and val_channel == channel then
     redis.call("LPOP", list)
     called = true
 end
