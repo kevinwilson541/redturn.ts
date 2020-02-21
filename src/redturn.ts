@@ -46,6 +46,16 @@ export enum RedTurnState {
   STOPPED = "STOPPED"
 }
 
+/**
+ *
+ * @class RedTurn
+ * @implements EventEmitter
+ *
+ * @description Class instance of redturn server. Requires two redis clients, one for redis commands and one
+ * for redis subscriptions. Uses a generated (or provided) ID to uniquely identity this client instance, which
+ * is used to identify which requests contexts belong to this instance, and listen for pubsub events over redis.
+ *
+ */
 export class RedTurn extends EventEmitter {
   private client: RedisClient
   private subclient: RedisSubClient
@@ -74,6 +84,15 @@ export class RedTurn extends EventEmitter {
     this.state = RedTurnState.STOPPED
   }
 
+  /**
+   *
+   * @function start
+   * @memberof RedTurn
+   *
+   * @description Starts redturn server. Loads scripts into redis, subscribes to internal redis channels,
+   * creates hooks for the when server is stopped, and sets internal state.
+   *
+   */
   async start() {
     if (this.state !== RedTurnState.STOPPED) {
       throw new Error(`Cannot start redturn server when in state ${RedTurnState.STOPPED}`)
@@ -118,6 +137,16 @@ export class RedTurn extends EventEmitter {
     await this.subclient.subscribe(this.id)
   }
 
+  /**
+   *
+   * @function stop
+   * @memberof RedTurn
+   *
+   * @description Stops the redturn server. Sets internal state and clears redis subscriptions.
+   * Any future requests on this client after this method is called will fail. Any pending requests
+   * will clear before this instance transitions to a `STOPPED` state.
+   *
+   */
   async stop() {
     if (this.state !== RedTurnState.RUNNING) {
       return
@@ -139,6 +168,22 @@ export class RedTurn extends EventEmitter {
     })
   }
 
+  /**
+   *
+   * @function wait
+   * @memberof RedTurn
+   *
+   * @param resource {string} Resource to wait on.
+   * @param timeout {number} Timeout of lock acquired from this call.
+   *
+   * @description Locks `resource`, waiting it's turn in the internal lock queue
+   * before acquiring a context and notified by the redis server. Once acquired, the context
+   * will have `timeout` milliseconds before automatically releasing and allowing the next
+   * context in the queue to resolve. Returns a context id only locally unique to this instance.
+   *
+   * @returns {Promise<string>}
+   *
+   */
   async wait(resource: string, timeout: number): Promise<string> {
     const id = this._genMsgId()
     const val = id + ":" + this.id + ":" + timeout
@@ -169,6 +214,24 @@ export class RedTurn extends EventEmitter {
 
   }
 
+  /**
+   *
+   * @function refresh
+   * @memberof RedTurn
+   *
+   * @param resource {string} Resource to refresh a lock context on.
+   * @param id {string} The context id being refreshed.
+   * @param timeout {number} Timeout of lock refreshed from this call.
+   *
+   * @description Refreshed lock context under `id` for `resource`, checking if the head context
+   * for `resource` is for `id`. If so, changes the id stored at the head of queue to a new id
+   * with a new timeout `timeout`. Once acquired, the context will have `timeout` milliseconds before
+   * automatically releasing and allowing the next context in the queue to resolve. Returns a context
+   * id only locally unique to this instance.
+   *
+   * @returns {Promise<string>}
+   *
+   */
   async refresh(resource: string, id: string, timeout: number): Promise<string> {
     const newId = this._genMsgId()
     const newVal = newId + ":" + this.id + ":" + timeout
@@ -210,14 +273,50 @@ export class RedTurn extends EventEmitter {
 
   }
 
+  /**
+   *
+   * @function signal
+   * @memberof RedTurn
+   *
+   * @param resource {string} Resource to signal release of lock context.
+   * @param id {string} The context id being released.
+   *
+   * @description Releases the lock context `id` for resource `resource`. Runs a redis script
+   * that notifies the next context in the queue that it's available for processing.
+   *
+   * @returns {Promise<void>}
+   *
+   */
   async signal(resource: string, id: string): Promise<void> {
     return this._signalDone(resource, this.id, id)
   }
 
+  /**
+   *
+   * @function getChannel
+   * @memberof RedTurn
+   *
+   * @description Returns the unique id of this redturn server instance, used for redis pubsub notifications
+   * for lock context acquisition.
+   *
+   * @returns {string}
+   *
+   */
   getChannel() {
     return this.id
   }
 
+  /**
+   *
+   * @function idle
+   * @memberof RedTurn
+   *
+   * @description Returns whether this redturn server instance has no pending lock contexts and no currently acquired
+   * lock contexts.
+   *
+   * @returns {boolean}
+   *
+   */
   idle() {
     return this.leased.size === 0 && this.waiting.size === 0
   }
@@ -309,7 +408,7 @@ export class RedTurn extends EventEmitter {
     }
   }
 
-  _deleteCtx(ctx: RequestCtx) {
+  private _deleteCtx(ctx: RequestCtx) {
     const { resource, id } = ctx
     const queue = this.reqQueue.get(resource)
 
