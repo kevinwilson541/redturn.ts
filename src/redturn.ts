@@ -1,5 +1,5 @@
 
-import { ADD_SCRIPT, REMOVE_SCRIPT } from "./constants/scripts"
+import { ADD_SCRIPT, REMOVE_SCRIPT, REFRESH_SCRIPT } from "./constants/scripts"
 import * as crypto from "crypto"
 import { ID_LEN } from "./constants/random";
 import Queue from "./queue";
@@ -55,6 +55,7 @@ export class RedTurn extends EventEmitter {
   private head: Map<string, HeadTracker>
   private addScript: string
   private removeScript: string
+  private refreshScript: string
   private timer: MonotonicTimer
   private leased: Set<string>
   private state: RedTurnState
@@ -78,10 +79,11 @@ export class RedTurn extends EventEmitter {
       throw new Error(`Cannot start redturn server when in state ${RedTurnState.STOPPED}`)
     }
 
-    if (!this.addScript || !this.removeScript) {
-      const [addScript, removeScript] = await this.client.pipeline()
+    if (!this.addScript || !this.removeScript || !this.refreshScript) {
+      const [addScript, removeScript, refreshScript] = await this.client.pipeline()
         .script(ScriptOperations.LOAD, ADD_SCRIPT)
         .script(ScriptOperations.LOAD, REMOVE_SCRIPT)
+        .script(ScriptOperations.LOAD, REFRESH_SCRIPT)
         .exec()
 
       if (addScript[0] === null && typeof addScript[1] === "string") {
@@ -94,6 +96,12 @@ export class RedTurn extends EventEmitter {
         this.removeScript = removeScript[1]
       } else {
         throw new Error(`Could not load REMOVE_SCRIPT`)
+      }
+
+      if (refreshScript[0] === null && typeof refreshScript[1] === "string") {
+        this.refreshScript = refreshScript[1]
+      } else {
+        throw new Error("Could not load REFRESH_SCRIPT")
       }
     }
 
@@ -158,7 +166,48 @@ export class RedTurn extends EventEmitter {
       const [ otherId, channel, timeoutStr ] = ret.split(":")
       this._replaceHead(resource, channel, otherId, parseInt(timeoutStr))
     })
-    
+
+  }
+
+  async refresh(resource: string, id: string, timeout: number): Promise<string> {
+    const newId = this._genMsgId()
+    const newVal = newId + ":" + this.id + ":" + timeout
+
+    return new Promise<string>(async (resolve, reject) => {
+      if (this.state !== RedTurnState.RUNNING) {
+        return reject(new Error("Closing"))
+      }
+
+      const ctx = { id: newId, resource, timeout, resolve, reject }
+      this.waiting.set(newId, ctx)
+      this.leased.delete(id)
+
+      let ret: string
+      try {
+        ret = await this.client.evalsha(this.refreshScript, 1, resource, this.id, id, newId, newVal)
+      } catch (e) {
+        this.waiting.delete(newId)
+        if (this.idle() === true) {
+          this.emit("idle")
+        }
+        return reject(e)
+      }
+
+      this.waiting.delete(newId)
+
+      if (ret !== null && this.state === RedTurnState.RUNNING) {
+        const [ otherId, channel, timeoutStr ] = ret.split(":")
+        this._replaceHead(resource, channel, otherId, parseInt(timeoutStr))
+        this.leased.add(newId)
+        return resolve(otherId)
+      } else {
+        if (this.idle() === true) {
+          this.emit("idle")
+        }
+        return reject(new Error(`Failed to acquire refresh on resource ${resource} and id ${id}`))
+      }
+    })
+
   }
 
   async signal(resource: string, id: string): Promise<void> {
@@ -283,10 +332,10 @@ export class RedTurn extends EventEmitter {
     if (channel === this.id) {
       this.leased.delete(id)
     }
-    
+
     try {
       const ret: string = await this.client.evalsha(this.removeScript, 1, resource, id, channel)
-      if (ret !== null && this.state == RedTurnState.RUNNING) {
+      if (ret !== null && this.state === RedTurnState.RUNNING) {
         const [ otherId, channel, timeoutStr ] = ret.split(":")
         this._replaceHead(resource, channel, otherId, parseInt(timeoutStr))
       }

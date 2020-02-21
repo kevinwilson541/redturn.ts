@@ -12,6 +12,30 @@ end
 return redis.call(\"LINDEX\", list, 0)
 `
 
+export const REFRESH_SCRIPT = `
+local list = KEYS[1]
+local channel = ARGV[1]
+local old_id = ARGV[2]
+local new_id = ARGV[3]
+local new_value = ARGV[4]
+
+local value = redis.call("LINDEX", list, 0)
+local val_split = {}
+for w in (value .. ":"):gmatch("([^:]*):") do
+    table.insert(val_split, w)
+end
+
+local val_id = val_split[1]
+local val_channel = val_split[2]
+
+if val_id == old_id and val_channel == channel then
+    redis.call("LSET", list, 0, new_value)
+    return new_value
+end
+
+return nil
+`
+
 export const REMOVE_SCRIPT = `
 local list = KEYS[1]
 local id = ARGV[1]

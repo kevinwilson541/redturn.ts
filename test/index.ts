@@ -145,4 +145,39 @@ describe("redturn tests", () => {
     await redis2.quit()
     await sub2.quit()
   })
+
+  it("should handle refresh", async () => {
+    const id = await client.wait("resource", 5000)
+    assert.equal(typeof id, "string")
+
+    const id2 = await client.refresh("resource", id, 5000)
+    assert.equal(typeof id2, "string")
+    assert.notEqual(id, id2)
+
+    const arr = await redis.lrange("resource", 0, -1)
+    assert.lengthOf(arr, 1)
+    const [ compareId, channel, timeoutStr ] = arr[0].split(":")
+    assert.equal(compareId, id2)
+    assert.equal(channel, client.getChannel())
+  })
+
+  it("should fail refresh when giving wrong head id", async () => {
+    const id = await client.wait("resource", 5000)
+    assert.equal(typeof id, "string")
+
+    let err: Error
+    try {
+      await client.refresh("resource", id + "1", 5000)
+    } catch (e) {
+      err = e
+    }
+
+    assert.ok(err)
+
+    const arr = await redis.lrange("resource", 0, -1)
+    assert.lengthOf(arr, 1)
+    const [ compareId, channel, timeoutStr ] = arr[0].split(":")
+    assert.equal(compareId, id)
+    assert.equal(channel, client.getChannel())
+  })
 })
