@@ -5,7 +5,8 @@
   "main": "built/index.js",
   "scripts": {
     "test": "TS_NODE_TRANSPILE_ONLY=true TS_NODE_LOG_ERROR=true NODE_ENV=test mocha \"test/*.ts\"",
-    "build": "rm -rf built && tsc"
+    "build": "rm -rf built && tsc",
+    "bench": "matcha benchmark/*.js"
   },
   "repository": {
     "type": "git",
