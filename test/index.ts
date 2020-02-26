@@ -9,9 +9,18 @@ describe("redturn tests", () => {
   let redis: Redis.Redis
   let sub: Redis.Redis
 
-  before(() => {
+  before(async () => {
     redis = new Redis()
     sub = new Redis()
+
+    const redisReady = new Promise(resolve => {
+      redis.on("ready", resolve)
+    })
+    const subReady = new Promise(resolve => {
+      sub.on("ready", resolve)
+    })
+
+    await Promise.all([redisReady, subReady])
   })
 
   beforeEach(async () => {
@@ -179,5 +188,32 @@ describe("redturn tests", () => {
     const [ compareId, channel, timeoutStr ] = arr[0].split(":")
     assert.equal(compareId, id)
     assert.equal(channel, client.getChannel())
+  })
+
+  it("sequential lock performance", async () => {
+    const count = 1000
+    const start = Date.now()
+
+    for (let i = 0; i < count; ++i) {
+      const id = await client.wait("resource", 30000)
+      await client.signal("resource", id)
+    }
+
+    console.log(count, 'sequential locks took', Date.now() - start, 'ms', count * (1000 / (Date.now() - start)), 'op/s');
+  })
+
+  it("concurrent lock performance", async () => {
+    const promises: Promise<void>[] = []
+    const count = 1000
+    const start = Date.now()
+
+    for (let i = 0; i < count; ++i) {
+      promises.push(client.wait("resource", 30000).then(id => {
+        return client.signal("resource", id)
+      }))
+    }
+
+    await Promise.all(promises)
+    console.log(count, 'concurrent locks took', Date.now() - start, 'ms', count * (1000 / (Date.now() - start)), 'op/s');
   })
 })
