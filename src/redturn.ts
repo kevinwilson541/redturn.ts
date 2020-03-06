@@ -127,8 +127,15 @@ export class RedTurn extends EventEmitter {
     this.state = RedTurnState.RUNNING
     const handler = (channel, message) => {
       if (channel !== this.id) return
-      const [ resource, id ] = message.split(":")
-      this._notifyWait(resource, id)
+      const index = message.search(":")
+      if (index === -1) {
+        return
+      } else {
+        const id = message.slice(0, index)
+        const resource = message.slice(index+1)
+        this._notifyWait(resource, id)
+      }
+
     }
     this.subclient.on("message", handler)
     this.on("closed", () => {
