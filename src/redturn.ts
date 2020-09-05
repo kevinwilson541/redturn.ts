@@ -57,17 +57,27 @@ export enum RedTurnState {
  *
  */
 export class RedTurn extends EventEmitter {
+  // redis client to issue commands to
   private client: RedisClient
+  // subscription client to listen for a lock's turn
   private subclient: RedisSubClient
+  // the unique id of this client, used in generate a unique subscription channel for this client
   private id: string
+  // map of lock resources to waiting lock requests
   private reqQueue: Map<string, Queue<string>>
+  // map of waiting lock requests to corresponding promise
   private waiting: Map<string, RequestCtx>
+  // map of lock resources to head of queue (used to manage lock timeouts to ensure queue moves forward)
   private head: Map<string, HeadTracker>
+  // redis scripts, pre-loaded for efficiency
   private addScript: string
   private removeScript: string
   private refreshScript: string
+  // monotonic timer instance
   private timer: MonotonicTimer
+  // set of currently leased lock requests
   private leased: Set<string>
+  // state of client
   private state: RedTurnState
 
   constructor(client: RedisClient, subclient: RedisSubClient, options: { id?: string } = {}) {
@@ -135,13 +145,15 @@ export class RedTurn extends EventEmitter {
         const resource = message.slice(index+1)
         this._notifyWait(resource, id)
       }
-
     }
+
     this.subclient.on("message", handler)
     this.on("closed", () => {
       this.subclient.removeListener("message", handler)
     })
     await this.subclient.subscribe(this.id)
+
+    this.subclient.on("reconnecting", this._handleDisconnect.bind(this))
   }
 
   /**
@@ -205,14 +217,11 @@ export class RedTurn extends EventEmitter {
 
       let ret: string
       try {
+        // add script only takes 1 key (the resource), followed by 3 args: channel, lock value, and holder id
         ret = await this.client.evalsha(this.addScript, 1, resource, this.id, val, id)
       } catch (e) {
         this._deleteCtx(ctx)
         return reject(e)
-      }
-
-      if (this.state !== RedTurnState.RUNNING) {
-        return
       }
 
       const [ otherId, channel, timeoutStr ] = ret.split(":")
@@ -254,6 +263,7 @@ export class RedTurn extends EventEmitter {
 
       let ret: string
       try {
+        // refresh script only takes on key (the resource), followed by 4 args: channel, holder id, new holder id, and new lock value
         ret = await this.client.evalsha(this.refreshScript, 1, resource, this.id, id, newId, newVal)
       } catch (e) {
         this.waiting.delete(newId)
@@ -265,7 +275,7 @@ export class RedTurn extends EventEmitter {
 
       this.waiting.delete(newId)
 
-      if (ret !== null && this.state === RedTurnState.RUNNING) {
+      if (ret !== null) {
         const [ otherId, channel, timeoutStr ] = ret.split(":")
         this._replaceHead(resource, channel, otherId, parseInt(timeoutStr))
         this.leased.add(newId)
@@ -374,7 +384,7 @@ export class RedTurn extends EventEmitter {
       const [ milli, counter ] = head.split(".")
       const [ ctxMilli, ctxCounter ] = id.split(".")
       // if we receive notification for active ctx greater than the current head, head was skipped
-      // otherwise, we should return an error as this notified ctx was skipped
+      // otherwise, we should return an error for this ctx as this notified ctx was skipped
       if (milli < ctxMilli || (milli === ctxMilli && counter < ctxCounter)) {
         const otherCtx = this.waiting.get(head)
         queue.dequeue()
@@ -388,23 +398,26 @@ export class RedTurn extends EventEmitter {
       }
     }
 
+    // if we successfully found the context, dequeue from req queue, delete the waiting value, and reply
     if (head === id) {
       queue.dequeue()
       this.waiting.delete(id)
       this._reply(ctx)
     }
 
+    // if our request queue is empty, delete it
     if (queue.len() === 0) {
       this.reqQueue.delete(resource)
     }
 
+    // if we're idle (in the case we didn't find the context we were looking for), notify instance as such
     if (this.idle()) {
       this.emit("idle")
     }
   }
 
   private _notifyWait(resource: string, id: string) {
-    if (this.state !== RedTurnState.RUNNING) return
+    if (this.state === RedTurnState.STOPPED) return
 
     const ctx = this.waiting.get(id)
     if (!ctx) {
@@ -440,8 +453,9 @@ export class RedTurn extends EventEmitter {
     }
 
     try {
+      // remove script only takes 1 key (the resource), followed by 2 args: holder id, and channel
       const ret: string = await this.client.evalsha(this.removeScript, 1, resource, id, channel)
-      if (ret !== null && this.state === RedTurnState.RUNNING) {
+      if (ret !== null && this.state !== RedTurnState.STOPPED) {
         const [ otherId, channel, timeoutStr ] = ret.split(":")
         this._replaceHead(resource, channel, otherId, parseInt(timeoutStr))
       }
@@ -455,6 +469,8 @@ export class RedTurn extends EventEmitter {
   }
 
   private _reply(ctx: RequestCtx, error?: any) {
+    // if we're responding with an error, reject the promise
+    // else, add this context to our leased set (to prevent idling) and resolve the promise
     if (error) {
       return ctx.reject(error)
     } else {
@@ -473,5 +489,10 @@ export class RedTurn extends EventEmitter {
     this.waiting.clear()
     this.reqQueue.clear()
     this.leased.clear()
+  }
+
+  private _handleDisconnect() {
+    // remove waiting, req queue, and heads
+    // respond to each waiting with an error
   }
 }
